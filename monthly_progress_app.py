@@ -379,29 +379,45 @@ def district_dashboard():
         with col3:
             reporting_date = st.date_input("Reporting Date", value=date.today())
         
-        # Check if entry already exists
-        existing_data = get_district_data(st.session_state.user_district, month, year)
-        
-        show_form = True   # controls whether blank form appears
-        entry_locked = False
+        # Check if entry already exists for selected month/year
+        existing_data = get_district_data(
+            st.session_state.user_district,
+            month,
+            year
+        )
         
         if existing_data:
-            show_form = False  # never allow new blank form
-        
             st.warning(
                 f"⚠️ Entry for {datetime(year, month, 1).strftime('%B %Y')} already exists"
             )
         
             if existing_data[0]['status'] == 'approved':
                 st.error("❌ This entry has been approved and cannot be modified")
-                st.info("You can view this report under 'View Submissions'")
-                entry_locked = True
-        
+            elif existing_data[0]['status'] == 'submitted':
+                st.info("📤 This entry has already been submitted for approval")
             else:
-                if st.button("✏️ Edit Existing Entry"):
-                    st.session_state.edit_mode = True
-                    st.session_state.existing_data = existing_data[0]
-                    show_form = True
+                st.info("💾 This entry already exists as a draft")
+        
+            st.info("Editing is available under the 'View Submissions' tab")
+        else:
+            # ================= FORM SHOULD APPEAR ONLY HERE =================
+        
+            with st.container(border=True):
+                st.subheader("Reporting Officer Details")
+                col1, col2 = st.columns(2)
+                with col1:
+                    officer_name = st.text_input("Name of Reporting Officer")
+                    designation = st.text_input("Designation")
+                with col2:
+                    contact = st.text_input("Contact Number")
+                    email = st.text_input("Email")
+        
+            st.subheader("Monthly Progress Data")
+        
+            form_data = {}
+            for category, details in MONTHLY_CATEGORIES.items():
+                with st.expander(f"📁 {category} - {details['description']}", expanded=True):
+                    ...
 
         
         # Form header
