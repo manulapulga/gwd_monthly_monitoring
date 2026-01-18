@@ -1,0 +1,21 @@
+# .streamlit/config.toml
+[server]
+headless = true
+port = 8501
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+serverAddress = "localhost"
+serverPort = 8501
+
+[runner]
+magicEnabled = false
+mainFile = "monthly_progress_app.py"
+
+[theme]
+primaryColor = "#1e5799"
+backgroundColor = "#f0f2f6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#262730"
+font = "sans serif"
