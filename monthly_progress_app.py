@@ -220,6 +220,8 @@ def authenticate_user(email, password):
 
 def save_monthly_data(district, month, year, data, status="draft"):
     """Save monthly data to Firestore"""
+    if db is None:
+        return False, "Firestore not connected (db is None)"
     try:
         doc_id = f"{district}_{year}_{month:02d}"
         
@@ -496,9 +498,9 @@ def district_dashboard():
             # Filter data
             filtered_data = []
             for entry in all_data:
-                if filter_year != "All" and entry.get('year') != filter_year:
+                if filter_year != "All" and entry.get('year') != int(filter_year):
                     continue
-                if filter_month != "All" and entry.get('month') != filter_month:
+                if filter_month != "All" and entry.get('month') != int(filter_month):
                     continue
                 if filter_status != "All" and entry.get('status') != filter_status:
                     continue
