@@ -1,4 +1,4 @@
-# monthly_progress_app
+# monthly_progress_app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,6 +6,7 @@ from datetime import datetime, date
 import json
 import plotly.express as px
 import plotly.graph_objects as go
+import io
 from firebase_config import initialize_firebase, get_firestore_client
 import firebase_admin
 from firebase_admin import firestore, auth
@@ -82,6 +83,13 @@ st.markdown("""
         font-size: 12px;
     }
     
+    .collapsible-table {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 10px;
+    }
+    
     /* Form styling */
     .stNumberInput input, .stTextInput input, .stTextArea textarea {
         font-size: 14px !important;
@@ -90,6 +98,31 @@ st.markdown("""
     /* Hide Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+    
+    /* Button styling */
+    .edit-button {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+    }
+    
+    .view-button {
+        background-color: #6c757d;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+    }
+    
+    .action-button {
+        margin: 2px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,12 +144,14 @@ if 'authenticated' not in st.session_state:
 if 'form_data' not in st.session_state:
     st.session_state.form_data = {}
 
-if 'active_entry' not in st.session_state:
-    st.session_state.active_entry = None
+if 'editing_entry' not in st.session_state:
+    st.session_state.editing_entry = None
 
-if 'entry_mode' not in st.session_state:
-    st.session_state.entry_mode = None  # "edit" or "view"
-    
+if 'viewing_entry' not in st.session_state:
+    st.session_state.viewing_entry = None
+
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = "New Entry"
 
 # ==================== DATA STRUCTURE ====================
 # This structure can be easily replaced later
@@ -225,12 +260,13 @@ def authenticate_user(email, password):
             return True
     return False
 
-def save_monthly_data(district, month, year, data, status="draft"):
+def save_monthly_data(district, month, year, data, status="draft", doc_id=None):
     """Save monthly data to Firestore"""
     if db is None:
         return False, "Firestore not connected (db is None)"
     try:
-        doc_id = f"{district}_{year}_{month:02d}"
+        if not doc_id:
+            doc_id = f"{district}_{year}_{month:02d}"
         
         monthly_data = {
             'district': district,
@@ -309,6 +345,111 @@ def update_data_status(doc_id, status, remarks=""):
     except Exception as e:
         return False, f"Error updating status: {str(e)}"
 
+# ==================== FORM RENDERING FUNCTIONS ====================
+def render_data_entry_form(entry_data=None, is_editable=True):
+    """Render the data entry form for new entry or editing"""
+    
+    # If editing an existing entry, pre-fill the form
+    if entry_data:
+        month = entry_data.get('month', datetime.now().month)
+        year = entry_data.get('year', datetime.now().year)
+        reporting_date = date.today()
+        form_data = entry_data.get('data', {})
+        status = entry_data.get('status', 'draft')
+    else:
+        month = datetime.now().month
+        year = datetime.now().year
+        reporting_date = date.today()
+        form_data = {}
+        status = 'draft'
+    
+    # Month and Year selection (disabled if editing)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        month_display = st.selectbox("Month", list(range(1, 13)), 
+                                     format_func=lambda x: datetime(2024, x, 1).strftime('%B'),
+                                     index=month-1, disabled=not is_editable or (entry_data and status != 'draft'))
+    with col2:
+        current_year = datetime.now().year
+        years = list(range(current_year - 5, current_year + 1))
+        year_display = st.selectbox("Year", years, index=years.index(year) if year in years else len(years)-1,
+                                   disabled=not is_editable or (entry_data and status != 'draft'))
+    with col3:
+        reporting_date = st.date_input("Reporting Date", value=reporting_date, disabled=not is_editable)
+    
+    # Form header
+    with st.container(border=True):
+        st.subheader("Reporting Officer Details")
+        col1, col2 = st.columns(2)
+        with col1:
+            officer_name = st.text_input("Name of Reporting Officer", 
+                                        value=form_data.get('officer_name', ''),
+                                        disabled=not is_editable)
+            designation = st.text_input("Designation", 
+                                       value=form_data.get('designation', ''),
+                                       disabled=not is_editable)
+        with col2:
+            contact = st.text_input("Contact Number", 
+                                   value=form_data.get('contact', ''),
+                                   disabled=not is_editable)
+            email = st.text_input("Email", 
+                                 value=form_data.get('email', ''),
+                                 disabled=not is_editable)
+    
+    # Main data entry form
+    st.subheader("Monthly Progress Data")
+    
+    current_form_data = {}
+    for category, details in MONTHLY_CATEGORIES.items():
+        with st.expander(f"📁 {category} - {details['description']}", expanded=True):
+            st.caption(details['description'])
+            
+            cols = st.columns(2)
+            col_index = 0
+            
+            for field in details['fields']:
+                with cols[col_index % 2]:
+                    field_id = f"{category}_{field['id']}"
+                    
+                    # Get existing value if editing
+                    existing_value = form_data.get(field_id, 0 if field['type'] == 'number' else '')
+                    
+                    if field['type'] == 'number':
+                        value = st.number_input(
+                            f"{field['label']} ({field.get('unit', '')})",
+                            min_value=0,
+                            value=float(existing_value) if existing_value else 0,
+                            key=f"edit_{field_id}" if entry_data else field_id,
+                            disabled=not is_editable
+                        )
+                    elif field['type'] == 'dropdown':
+                        value = st.selectbox(
+                            field['label'],
+                            options=field['options'],
+                            index=field['options'].index(existing_value) if existing_value in field['options'] else 0,
+                            key=f"edit_{field_id}" if entry_data else field_id,
+                            disabled=not is_editable
+                        )
+                    elif field['type'] == 'text':
+                        value = st.text_area(
+                            field['label'],
+                            value=existing_value,
+                            key=f"edit_{field_id}" if entry_data else field_id,
+                            height=100,
+                            disabled=not is_editable
+                        )
+                    
+                    current_form_data[field_id] = value
+                col_index += 1
+    
+    # Add officer details to form data
+    current_form_data['officer_name'] = officer_name
+    current_form_data['designation'] = designation
+    current_form_data['contact'] = contact
+    current_form_data['email'] = email
+    
+    return month_display, year_display, current_form_data
+
 # ==================== PAGE: LOGIN ====================
 def login_page():
     """Login page for all users"""
@@ -362,292 +503,267 @@ def district_dashboard():
     with col3:
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.authenticated = False
+            st.session_state.editing_entry = None
+            st.session_state.viewing_entry = None
             st.rerun()
     
-    # Tabs for different functionalities
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📝 New Entry", 
-        "📋 View Submissions", 
-        "📈 Progress Summary",
-        "⚙️ Profile"
-    ])
+    # Sidebar with tabs
+    with st.sidebar:
+        st.header("Navigation")
+        
+        # Tab selection
+        tabs = ["📝 New Entry", "📋 View Submissions", "📈 Progress Summary", "⚙️ Profile"]
+        selected_tab = st.radio("Select Tab", tabs, key="district_tabs")
+        
+        # Update session state
+        st.session_state.active_tab = selected_tab
+        
+        # Clear edit/view states when switching tabs (except when going to New Entry from edit)
+        if selected_tab != "📝 New Entry":
+            st.session_state.editing_entry = None
+            st.session_state.viewing_entry = None
     
     # ===== TAB 1: NEW ENTRY =====
-    with tab1:
+    if st.session_state.active_tab == "📝 New Entry":
         st.header("New Monthly Entry")
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            month = st.selectbox("Month", list(range(1, 13)), format_func=lambda x: datetime(2024, x, 1).strftime('%B'))
-        with col2:
-            current_year = datetime.now().year
-            years = list(range(current_year - 5, current_year + 1))
-            year = st.selectbox("Year", years)
-        with col3:
-            reporting_date = st.date_input("Reporting Date", value=date.today())
-        
-        # Check if entry already exists for selected month/year
-        existing_data = get_district_data(
-            st.session_state.user_district,
-            month,
-            year
-        )
-        
-        if existing_data:
-            st.warning(
-                f"⚠️ Entry for {datetime(year, month, 1).strftime('%B %Y')} already exists"
-            )
-        else:
-            # ================= FORM SHOULD APPEAR ONLY HERE =================
-        
-            with st.container(border=True):
-                st.subheader("Reporting Officer Details")
-                col1, col2 = st.columns(2)
-                with col1:
-                    officer_name = st.text_input("Name of Reporting Officer")
-                    designation = st.text_input("Designation")
-                with col2:
-                    contact = st.text_input("Contact Number")
-                    email = st.text_input("Email")
-        
-            st.subheader("Monthly Progress Data")
-        
-            form_data = {}
-            for category, details in MONTHLY_CATEGORIES.items():
-                with st.expander(f"📁 {category} - {details['description']}", expanded=True):
-                    ...
-
-        
-        # Form header
-        with st.container(border=True):
-            st.subheader("Reporting Officer Details")
-            col1, col2 = st.columns(2)
+        # Check if we're in edit mode
+        if st.session_state.editing_entry:
+            entry = st.session_state.editing_entry
+            status = entry.get('status', 'draft')
+            
+            st.warning(f"📝 Editing entry for {datetime(entry['year'], entry['month'], 1).strftime('%B %Y')} (Status: {status})")
+            
+            # Render edit form
+            month, year, form_data = render_data_entry_form(entry, is_editable=(status != 'approved'))
+            
+            # Submission buttons for editing
+            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
             with col1:
-                officer_name = st.text_input("Name of Reporting Officer")
-                designation = st.text_input("Designation")
+                if st.button("💾 Save Changes", use_container_width=True, disabled=status=='approved'):
+                    doc_id = f"{st.session_state.user_district}_{year}_{month:02d}"
+                    success, message = save_monthly_data(
+                        st.session_state.user_district,
+                        month,
+                        year,
+                        form_data,
+                        status=status,
+                        doc_id=doc_id
+                    )
+                    if success:
+                        st.success("Changes saved successfully!")
+                        st.session_state.editing_entry = None
+                        st.rerun()
+                    else:
+                        st.error(message)
+            
             with col2:
-                contact = st.text_input("Contact Number")
-                email = st.text_input("Email")
+                if st.button("📤 Submit for Approval", use_container_width=True, disabled=status=='approved'):
+                    doc_id = f"{st.session_state.user_district}_{year}_{month:02d}"
+                    success, message = save_monthly_data(
+                        st.session_state.user_district,
+                        month,
+                        year,
+                        form_data,
+                        status="submitted",
+                        doc_id=doc_id
+                    )
+                    if success:
+                        st.success("Submitted for approval!")
+                        st.session_state.editing_entry = None
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error(message)
+            
+            with col3:
+                if st.button("🔄 Reset Form", use_container_width=True):
+                    st.session_state.editing_entry = None
+                    st.rerun()
+            
+            with col4:
+                if st.button("❌ Cancel Edit", use_container_width=True):
+                    st.session_state.editing_entry = None
+                    st.rerun()
         
-        # Main data entry form
-        st.subheader("Monthly Progress Data")
-        
-        form_data = {}
-        for category, details in MONTHLY_CATEGORIES.items():
-            with st.expander(f"📁 {category} - {details['description']}", expanded=True):
-                st.caption(details['description'])
-                
-                cols = st.columns(2)
-                col_index = 0
-                
-                for field in details['fields']:
-                    with cols[col_index % 2]:
-                        field_id = f"{category}_{field['id']}"
-                        
-                        if field['type'] == 'number':
-                            value = st.number_input(
-                                f"{field['label']} ({field.get('unit', '')})",
-                                min_value=0,
-                                value=0,
-                                key=field_id
-                            )
-                        elif field['type'] == 'dropdown':
-                            value = st.selectbox(
-                                field['label'],
-                                options=field['options'],
-                                key=field_id
-                            )
-                        elif field['type'] == 'text':
-                            value = st.text_area(
-                                field['label'],
-                                key=field_id,
-                                height=100
-                            )
-                        
-                        form_data[field_id] = value
-                    col_index += 1
-        
-        # Submission buttons
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
-            if st.button("💾 Save Draft", use_container_width=True):
-                success, message = save_monthly_data(
-                    st.session_state.user_district,
-                    month,
-                    year,
-                    form_data,
-                    status="draft"
+        else:
+            # Check if entry already exists for current month/year
+            current_month = datetime.now().month
+            current_year = datetime.now().year
+            
+            existing_data = get_district_data(
+                st.session_state.user_district,
+                current_month,
+                current_year
+            )
+            
+            if existing_data:
+                st.warning(
+                    f"⚠️ Entry for {datetime(current_year, current_month, 1).strftime('%B %Y')} already exists. "
+                    f"You can edit it in the 'View Submissions' tab."
                 )
-                if success:
-                    st.success("Draft saved successfully!")
-                else:
-                    st.error(message)
-        
-        with col2:
-            if st.button("📤 Submit for Approval", use_container_width=True):
-                success, message = save_monthly_data(
-                    st.session_state.user_district,
-                    month,
-                    year,
-                    form_data,
-                    status="submitted"
-                )
-                if success:
-                    st.success("Submitted for approval!")
-                    st.balloons()
-                else:
-                    st.error(message)
-        
-        with col3:
-            if st.button("🔄 Reset Form", use_container_width=True):
-                st.rerun()
+            
+            # Render new entry form
+            month, year, form_data = render_data_entry_form(None, is_editable=True)
+            
+            # Submission buttons for new entry
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                if st.button("💾 Save Draft", use_container_width=True):
+                    success, message = save_monthly_data(
+                        st.session_state.user_district,
+                        month,
+                        year,
+                        form_data,
+                        status="draft"
+                    )
+                    if success:
+                        st.success("Draft saved successfully!")
+                        st.rerun()
+                    else:
+                        st.error(message)
+            
+            with col2:
+                if st.button("📤 Submit for Approval", use_container_width=True):
+                    success, message = save_monthly_data(
+                        st.session_state.user_district,
+                        month,
+                        year,
+                        form_data,
+                        status="submitted"
+                    )
+                    if success:
+                        st.success("Submitted for approval!")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error(message)
+            
+            with col3:
+                if st.button("🔄 Reset Form", use_container_width=True):
+                    st.rerun()
     
     # ===== TAB 2: VIEW SUBMISSIONS =====
-    with tab2:
+    elif st.session_state.active_tab == "📋 View Submissions":
         st.header("Previous Submissions")
-    
-        # ---- Filters ----
+        
+        # Filters
         col1, col2, col3 = st.columns(3)
         with col1:
-            filter_year = st.selectbox(
-                "Filter by Year",
-                ["All"] + list(range(2020, datetime.now().year + 1))
-            )
+            filter_year = st.selectbox("Filter by Year", ["All"] + list(range(2020, datetime.now().year + 1)), key="filter_year")
         with col2:
-            filter_month = st.selectbox(
-                "Filter by Month",
-                ["All"] + list(range(1, 13)),
-                format_func=lambda x: datetime(2024, x, 1).strftime('%B') if x != "All" else "All"
-            )
+            filter_month = st.selectbox("Filter by Month", ["All"] + list(range(1, 13)), 
+                                       format_func=lambda x: datetime(2024, x, 1).strftime('%B') if x != "All" else "All",
+                                       key="filter_month")
         with col3:
-            filter_status = st.selectbox(
-                "Filter by Status",
-                ["All", "draft", "submitted", "approved", "rejected"]
-            )
-    
-        # ---- Fetch data ----
+            filter_status = st.selectbox("Filter by Status", ["All", "draft", "submitted", "approved", "rejected"])
+        
+        # Get data
         all_data = get_district_data(st.session_state.user_district)
-    
+        
         if not all_data:
             st.info("No submissions found")
         else:
-            # ---- Apply filters ----
+            # Filter data
             filtered_data = []
             for entry in all_data:
-                if filter_year != "All" and entry['year'] != int(filter_year):
+                if filter_year != "All" and entry.get('year') != int(filter_year):
                     continue
-                if filter_month != "All" and entry['month'] != int(filter_month):
+                if filter_month != "All" and entry.get('month') != int(filter_month):
                     continue
-                if filter_status != "All" and entry['status'] != filter_status:
+                if filter_status != "All" and entry.get('status') != filter_status:
                     continue
                 filtered_data.append(entry)
-    
-            if not filtered_data:
-                st.info("No data matching the filters")
-            else:
-                # ---- Collapsible cards ----
-                for entry in sorted(
-                    filtered_data,
-                    key=lambda x: (x['year'], x['month']),
-                    reverse=True
-                ):
-                    month_year = datetime(entry['year'], entry['month'], 1).strftime('%B %Y')
-                    status = entry['status']
-    
-                    with st.expander(f"📄 {month_year}  |  Status: {status.upper()}"):
-                        col1, col2 = st.columns([4, 1])
-    
-                        with col1:
-                            st.write("**District:**", entry['district'])
-                            st.write("**Submitted on:**", entry.get('submitted_at', '—'))
-                            st.write("**Remarks:**", entry.get('review_remarks', '—'))
-    
-                        with col2:
-                            if status in ['draft', 'submitted']:
-                                if st.button(
-                                    "✏️ Edit",
-                                    key=f"edit_{entry['year']}_{entry['month']}"
-                                ):
-                                    st.session_state.active_entry = entry
-                                    st.session_state.entry_mode = "edit"
+            
+            # Display in table with action buttons
+            for entry in filtered_data:
+                with st.container(border=True):
+                    col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
+                    
+                    with col1:
+                        month_year = f"{datetime(entry['year'], entry['month'], 1).strftime('%B %Y')}"
+                        st.markdown(f"**{month_year}**")
+                    
+                    with col2:
+                        status = entry.get('status', 'draft')
+                        status_badge = {
+                            'draft': '<span class="pending-badge">DRAFT</span>',
+                            'submitted': '<span class="pending-badge">SUBMITTED</span>',
+                            'approved': '<span class="approved-badge">APPROVED</span>',
+                            'rejected': '<span class="rejected-badge">REJECTED</span>'
+                        }.get(status, status)
+                        st.markdown(status_badge, unsafe_allow_html=True)
+                    
+                    with col3:
+                        st.caption(f"Submitted: {entry.get('submitted_at', 'N/A')}")
+                    
+                    with col4:
+                        st.caption(f"Modified: {entry.get('last_modified', 'N/A')}")
+                    
+                    with col5:
+                        remarks = entry.get('review_remarks', '')
+                        if remarks:
+                            st.caption(f"Remarks: {remarks[:20]}..." if len(remarks) > 20 else f"Remarks: {remarks}")
+                    
+                    with col6:
+                        action_col1, action_col2 = st.columns(2)
+                        with action_col1:
+                            if status == 'approved':
+                                # View button for approved reports
+                                if st.button("👁️ View", key=f"view_{entry['district']}_{entry['year']}_{entry['month']}", 
+                                           use_container_width=True):
+                                    st.session_state.viewing_entry = entry
                                     st.rerun()
-    
-                            elif status == 'approved':
-                                if st.button(
-                                    "👁️ View",
-                                    key=f"view_{entry['year']}_{entry['month']}"
-                                ):
-                                    st.session_state.active_entry = entry
-                                    st.session_state.entry_mode = "view"
+                            else:
+                                # Edit button for non-approved reports
+                                if st.button("✏️ Edit", key=f"edit_{entry['district']}_{entry['year']}_{entry['month']}", 
+                                           use_container_width=True):
+                                    st.session_state.editing_entry = entry
+                                    st.session_state.active_tab = "📝 New Entry"
                                     st.rerun()
-    
-        # ---- Edit / View Section ----
-        if st.session_state.get("active_entry"):
-            st.divider()
-    
-            entry = st.session_state.active_entry
-            mode = st.session_state.entry_mode
-            readonly = (mode == "view")
-    
-            month_year = datetime(entry['year'], entry['month'], 1).strftime('%B %Y')
-    
-            st.subheader(
-                "✏️ Editing Report" if mode == "edit"
-                else "👁️ Viewing Report"
-                + f": {month_year}"
-            )
-    
-            form_data = {}
-    
-            for category, details in MONTHLY_CATEGORIES.items():
-                with st.expander(category, expanded=True):
-                    for field in details['fields']:
-                        key = f"{category}_{field['id']}"
-                        value = entry.get('data', {}).get(key, "")
-    
-                        if field['type'] == 'number':
-                            form_data[key] = st.number_input(
-                                field['label'],
-                                value=value,
-                                disabled=readonly,
-                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
-                            )
-                        elif field['type'] == 'dropdown':
-                            form_data[key] = st.selectbox(
-                                field['label'],
-                                field['options'],
-                                index=field['options'].index(value) if value in field['options'] else 0,
-                                disabled=readonly,
-                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
-                            )
-                        else:
-                            form_data[key] = st.text_area(
-                                field['label'],
-                                value=value,
-                                disabled=readonly,
-                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
-                            )
-    
-            if mode == "edit":
-                if st.button("💾 Update Report"):
-                    save_monthly_data(
-                        entry['district'],
-                        entry['month'],
-                        entry['year'],
-                        form_data,
-                        status=entry['status']
-                    )
-                    st.success("Report updated successfully")
-                    st.session_state.active_entry = None
+                        
+                        with action_col2:
+                            if st.button("📋 Details", key=f"details_{entry['district']}_{entry['year']}_{entry['month']}", 
+                                       use_container_width=True):
+                                if 'show_details' not in st.session_state:
+                                    st.session_state.show_details = {}
+                                key = f"{entry['district']}_{entry['year']}_{entry['month']}"
+                                st.session_state.show_details[key] = not st.session_state.show_details.get(key, False)
+                                st.rerun()
+                    
+                    # Show entry details if toggled
+                    key = f"{entry['district']}_{entry['year']}_{entry['month']}"
+                    if st.session_state.get('show_details', {}).get(key, False):
+                        st.divider()
+                        st.subheader(f"Details for {month_year}")
+                        
+                        # Display data in a structured way
+                        for category, details in MONTHLY_CATEGORIES.items():
+                            with st.expander(f"📁 {category}"):
+                                cols = st.columns(2)
+                                col_idx = 0
+                                for field in details['fields']:
+                                    field_id = f"{category}_{field['id']}"
+                                    value = entry.get('data', {}).get(field_id, 'N/A')
+                                    with cols[col_idx % 2]:
+                                        st.markdown(f"**{field['label']}:** {value} {field.get('unit', '')}")
+                                    col_idx += 1
+            
+            # Show view interface if a report is being viewed
+            if st.session_state.viewing_entry:
+                entry = st.session_state.viewing_entry
+                st.divider()
+                st.header(f"📄 Viewing Report: {datetime(entry['year'], entry['month'], 1).strftime('%B %Y')}")
+                
+                # Display view-only form
+                _, _, _ = render_data_entry_form(entry, is_editable=False)
+                
+                if st.button("← Back to List", use_container_width=True):
+                    st.session_state.viewing_entry = None
                     st.rerun()
     
-            if st.button("❌ Close"):
-                st.session_state.active_entry = None
-                st.rerun()
-
-    
     # ===== TAB 3: PROGRESS SUMMARY =====
-    with tab3:
+    elif st.session_state.active_tab == "📈 Progress Summary":
         st.header("Progress Summary")
         
         # Get all data for the district
@@ -743,7 +859,7 @@ def district_dashboard():
                 st.info("No approved data available for analysis")
     
     # ===== TAB 4: PROFILE =====
-    with tab4:
+    elif st.session_state.active_tab == "⚙️ Profile":
         st.header("User Profile")
         
         with st.container(border=True):
