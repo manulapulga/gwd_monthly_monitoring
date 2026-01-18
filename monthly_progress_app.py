@@ -393,16 +393,6 @@ def district_dashboard():
         else:
             # ================= FORM SHOULD APPEAR ONLY HERE =================
         
-            with st.container(border=True):
-                st.subheader("Reporting Officer Details")
-                col1, col2 = st.columns(2)
-                with col1:
-                    officer_name = st.text_input("Name of Reporting Officer")
-                    designation = st.text_input("Designation")
-                with col2:
-                    contact = st.text_input("Contact Number")
-                    email = st.text_input("Email")
-        
             st.subheader("Monthly Progress Data")
         
             form_data = {}
