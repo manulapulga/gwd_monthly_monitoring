@@ -506,32 +506,45 @@ def district_dashboard():
     with tab2:
         st.header("Previous Submissions")
     
-        # ---- Filters ----
+        # ---------- Session state ----------
+        if 'active_entry' not in st.session_state:
+            st.session_state.active_entry = None
+    
+        if 'entry_mode' not in st.session_state:
+            st.session_state.entry_mode = None  # "edit" or "view"
+    
+        if 'collapse_table' not in st.session_state:
+            st.session_state.collapse_table = False
+    
+        # ---------- Filters ----------
         col1, col2, col3 = st.columns(3)
+    
         with col1:
             filter_year = st.selectbox(
                 "Filter by Year",
                 ["All"] + list(range(2020, datetime.now().year + 1))
             )
+    
         with col2:
             filter_month = st.selectbox(
                 "Filter by Month",
                 ["All"] + list(range(1, 13)),
                 format_func=lambda x: datetime(2024, x, 1).strftime('%B') if x != "All" else "All"
             )
+    
         with col3:
             filter_status = st.selectbox(
                 "Filter by Status",
                 ["All", "draft", "submitted", "approved", "rejected"]
             )
     
-        # ---- Fetch data ----
+        # ---------- Fetch data ----------
         all_data = get_district_data(st.session_state.user_district)
     
         if not all_data:
             st.info("No submissions found")
         else:
-            # ---- Apply filters ----
+            # ---------- Apply filters ----------
             filtered_data = []
             for entry in all_data:
                 if filter_year != "All" and entry['year'] != int(filter_year):
@@ -545,44 +558,58 @@ def district_dashboard():
             if not filtered_data:
                 st.info("No data matching the filters")
             else:
-                # ---- Collapsible cards ----
-                for entry in sorted(
-                    filtered_data,
-                    key=lambda x: (x['year'], x['month']),
-                    reverse=True
+                # ---------- Collapsible table ----------
+                with st.expander(
+                    "📑 Previous Submissions",
+                    expanded=not st.session_state.collapse_table
                 ):
-                    month_year = datetime(entry['year'], entry['month'], 1).strftime('%B %Y')
-                    status = entry['status']
+                    # Table header
+                    h1, h2, h3, h4, h5 = st.columns([2, 1.2, 2, 2, 1])
+                    h1.markdown("**Month – Year**")
+                    h2.markdown("**Status**")
+                    h3.markdown("**Submitted On**")
+                    h4.markdown("**Remarks**")
+                    h5.markdown("**Action**")
     
-                    with st.expander(f"📄 {month_year}  |  Status: {status.upper()}"):
-                        col1, col2 = st.columns([4, 1])
+                    st.divider()
     
-                        with col1:
-                            st.write("**District:**", entry['district'])
-                            st.write("**Submitted on:**", entry.get('submitted_at', '—'))
-                            st.write("**Remarks:**", entry.get('review_remarks', '—'))
+                    for entry in sorted(
+                        filtered_data,
+                        key=lambda x: (x['year'], x['month']),
+                        reverse=True
+                    ):
+                        month_year = datetime(entry['year'], entry['month'], 1).strftime('%B %Y')
+                        status = entry['status']
     
-                        with col2:
-                            if status in ['draft', 'submitted']:
-                                if st.button(
-                                    "✏️ Edit",
-                                    key=f"edit_{entry['year']}_{entry['month']}"
-                                ):
-                                    st.session_state.active_entry = entry
-                                    st.session_state.entry_mode = "edit"
-                                    st.rerun()
+                        c1, c2, c3, c4, c5 = st.columns([2, 1.2, 2, 2, 1])
     
-                            elif status == 'approved':
-                                if st.button(
-                                    "👁️ View",
-                                    key=f"view_{entry['year']}_{entry['month']}"
-                                ):
-                                    st.session_state.active_entry = entry
-                                    st.session_state.entry_mode = "view"
-                                    st.rerun()
+                        c1.write(month_year)
+                        c2.write(status.upper())
+                        c3.write(entry.get('submitted_at', '—'))
+                        c4.write(entry.get('review_remarks', '—'))
     
-        # ---- Edit / View Section ----
-        if st.session_state.get("active_entry"):
+                        if status in ['draft', 'submitted']:
+                            if c5.button(
+                                "✏️ Edit",
+                                key=f"edit_{entry['year']}_{entry['month']}"
+                            ):
+                                st.session_state.active_entry = entry
+                                st.session_state.entry_mode = "edit"
+                                st.session_state.collapse_table = True
+                                st.rerun()
+    
+                        elif status == 'approved':
+                            if c5.button(
+                                "👁️ View",
+                                key=f"view_{entry['year']}_{entry['month']}"
+                            ):
+                                st.session_state.active_entry = entry
+                                st.session_state.entry_mode = "view"
+                                st.session_state.collapse_table = True
+                                st.rerun()
+    
+        # ---------- Edit / View form ----------
+        if st.session_state.active_entry:
             st.divider()
     
             entry = st.session_state.active_entry
@@ -592,9 +619,7 @@ def district_dashboard():
             month_year = datetime(entry['year'], entry['month'], 1).strftime('%B %Y')
     
             st.subheader(
-                "✏️ Editing Report" if mode == "edit"
-                else "👁️ Viewing Report"
-                + f": {month_year}"
+                f"{'✏️ Editing' if mode == 'edit' else '👁️ Viewing'} Report – {month_year}"
             )
     
             form_data = {}
@@ -602,30 +627,32 @@ def district_dashboard():
             for category, details in MONTHLY_CATEGORIES.items():
                 with st.expander(category, expanded=True):
                     for field in details['fields']:
-                        key = f"{category}_{field['id']}"
-                        value = entry.get('data', {}).get(key, "")
+                        field_key = f"{category}_{field['id']}"
+                        value = entry.get('data', {}).get(field_key, "")
+    
+                        widget_key = f"{field_key}_{mode}_{entry['year']}_{entry['month']}"
     
                         if field['type'] == 'number':
-                            form_data[key] = st.number_input(
+                            form_data[field_key] = st.number_input(
                                 field['label'],
                                 value=value,
                                 disabled=readonly,
-                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
+                                key=widget_key
                             )
                         elif field['type'] == 'dropdown':
-                            form_data[key] = st.selectbox(
+                            form_data[field_key] = st.selectbox(
                                 field['label'],
                                 field['options'],
                                 index=field['options'].index(value) if value in field['options'] else 0,
                                 disabled=readonly,
-                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
+                                key=widget_key
                             )
                         else:
-                            form_data[key] = st.text_area(
+                            form_data[field_key] = st.text_area(
                                 field['label'],
                                 value=value,
                                 disabled=readonly,
-                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
+                                key=widget_key
                             )
     
             if mode == "edit":
@@ -639,10 +666,12 @@ def district_dashboard():
                     )
                     st.success("Report updated successfully")
                     st.session_state.active_entry = None
+                    st.session_state.collapse_table = False
                     st.rerun()
     
             if st.button("❌ Close"):
                 st.session_state.active_entry = None
+                st.session_state.collapse_table = False
                 st.rerun()
 
     
