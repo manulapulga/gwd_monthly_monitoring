@@ -390,15 +390,6 @@ def district_dashboard():
             st.warning(
                 f"⚠️ Entry for {datetime(year, month, 1).strftime('%B %Y')} already exists"
             )
-        
-            if existing_data[0]['status'] == 'approved':
-                st.error("❌ This entry has been approved and cannot be modified")
-            elif existing_data[0]['status'] == 'submitted':
-                st.info("📤 This entry has already been submitted for approval")
-            else:
-                st.info("💾 This entry already exists as a draft")
-        
-            st.info("Editing is available under the 'View Submissions' tab")
         else:
             # ================= FORM SHOULD APPEAR ONLY HERE =================
         
