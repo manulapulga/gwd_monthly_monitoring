@@ -111,6 +111,13 @@ if 'authenticated' not in st.session_state:
 if 'form_data' not in st.session_state:
     st.session_state.form_data = {}
 
+if 'active_entry' not in st.session_state:
+    st.session_state.active_entry = None
+
+if 'entry_mode' not in st.session_state:
+    st.session_state.entry_mode = None  # "edit" or "view"
+    
+
 # ==================== DATA STRUCTURE ====================
 # This structure can be easily replaced later
 MONTHLY_CATEGORIES = {
@@ -393,6 +400,16 @@ def district_dashboard():
         else:
             # ================= FORM SHOULD APPEAR ONLY HERE =================
         
+            with st.container(border=True):
+                st.subheader("Reporting Officer Details")
+                col1, col2 = st.columns(2)
+                with col1:
+                    officer_name = st.text_input("Name of Reporting Officer")
+                    designation = st.text_input("Designation")
+                with col2:
+                    contact = st.text_input("Contact Number")
+                    email = st.text_input("Email")
+        
             st.subheader("Monthly Progress Data")
         
             form_data = {}
@@ -488,88 +505,146 @@ def district_dashboard():
     # ===== TAB 2: VIEW SUBMISSIONS =====
     with tab2:
         st.header("Previous Submissions")
-        
-        # Filters
+    
+        # ---- Filters ----
         col1, col2, col3 = st.columns(3)
         with col1:
-            filter_year = st.selectbox("Filter by Year", ["All"] + list(range(2020, datetime.now().year + 1)), key="filter_year")
+            filter_year = st.selectbox(
+                "Filter by Year",
+                ["All"] + list(range(2020, datetime.now().year + 1))
+            )
         with col2:
-            filter_month = st.selectbox("Filter by Month", ["All"] + list(range(1, 13)), 
-                                       format_func=lambda x: datetime(2024, x, 1).strftime('%B') if x != "All" else "All",
-                                       key="filter_month")
+            filter_month = st.selectbox(
+                "Filter by Month",
+                ["All"] + list(range(1, 13)),
+                format_func=lambda x: datetime(2024, x, 1).strftime('%B') if x != "All" else "All"
+            )
         with col3:
-            filter_status = st.selectbox("Filter by Status", ["All", "draft", "submitted", "approved", "rejected"])
-        
-        # Get data
+            filter_status = st.selectbox(
+                "Filter by Status",
+                ["All", "draft", "submitted", "approved", "rejected"]
+            )
+    
+        # ---- Fetch data ----
         all_data = get_district_data(st.session_state.user_district)
-        
+    
         if not all_data:
             st.info("No submissions found")
         else:
-            # Filter data
+            # ---- Apply filters ----
             filtered_data = []
             for entry in all_data:
-                if filter_year != "All" and entry.get('year') != int(filter_year):
+                if filter_year != "All" and entry['year'] != int(filter_year):
                     continue
-                if filter_month != "All" and entry.get('month') != int(filter_month):
+                if filter_month != "All" and entry['month'] != int(filter_month):
                     continue
-                if filter_status != "All" and entry.get('status') != filter_status:
+                if filter_status != "All" and entry['status'] != filter_status:
                     continue
                 filtered_data.append(entry)
-            
-            # Display in table
-            display_data = []
-            for entry in filtered_data:
-                display_data.append({
-                    'Month-Year': f"{datetime(entry['year'], entry['month'], 1).strftime('%B %Y')}",
-                    'Status': entry['status'],
-                    'Submitted On': entry.get('submitted_at', 'N/A'),
-                    'Last Modified': entry.get('last_modified', 'N/A'),
-                    'Remarks': entry.get('review_remarks', '')
-                })
-            
-            if display_data:
-                df = pd.DataFrame(display_data)
-                
-                # Add status badges
-                def format_status(status):
-                    badge_class = {
-                        'draft': 'pending-badge',
-                        'submitted': 'pending-badge',
-                        'approved': 'approved-badge',
-                        'rejected': 'rejected-badge'
-                    }.get(status, '')
-                    
-                    if badge_class:
-                        return f'<span class="{badge_class}">{status.upper()}</span>'
-                    return status
-                
-                # Convert DataFrame to HTML with badges
-                html = df.to_html(escape=False, index=False)
-                html = html.replace('<td>draft</td>', '<td><span class="pending-badge">DRAFT</span></td>')
-                html = html.replace('<td>submitted</td>', '<td><span class="pending-badge">SUBMITTED</span></td>')
-                html = html.replace('<td>approved</td>', '<td><span class="approved-badge">APPROVED</span></td>')
-                html = html.replace('<td>rejected</td>', '<td><span class="rejected-badge">REJECTED</span></td>')
-                
-                st.markdown(html, unsafe_allow_html=True)
-                
-                # Allow editing of drafts
-                st.subheader("Edit Entry")
-                edit_options = [f"{entry['month']}/{entry['year']} - {entry['status']}" for entry in filtered_data]
-                selected_edit = st.selectbox("Select entry to edit", edit_options)
-                
-                if selected_edit and st.button("Edit Selected Entry"):
-                    selected_index = edit_options.index(selected_edit)
-                    selected_entry = filtered_data[selected_index]
-                    
-                    if selected_entry['status'] == 'approved':
-                        st.error("Approved entries cannot be edited")
-                    else:
-                        st.session_state.edit_mode = True
-                        st.session_state.edit_entry = selected_entry
-                        st.info("Switch to 'New Entry' tab to edit")
-            else:
+    
+            if not filtered_data:
                 st.info("No data matching the filters")
+            else:
+                # ---- Collapsible cards ----
+                for entry in sorted(
+                    filtered_data,
+                    key=lambda x: (x['year'], x['month']),
+                    reverse=True
+                ):
+                    month_year = datetime(entry['year'], entry['month'], 1).strftime('%B %Y')
+                    status = entry['status']
+    
+                    with st.expander(f"📄 {month_year}  |  Status: {status.upper()}"):
+                        col1, col2 = st.columns([4, 1])
+    
+                        with col1:
+                            st.write("**District:**", entry['district'])
+                            st.write("**Submitted on:**", entry.get('submitted_at', '—'))
+                            st.write("**Remarks:**", entry.get('review_remarks', '—'))
+    
+                        with col2:
+                            if status in ['draft', 'submitted']:
+                                if st.button(
+                                    "✏️ Edit",
+                                    key=f"edit_{entry['year']}_{entry['month']}"
+                                ):
+                                    st.session_state.active_entry = entry
+                                    st.session_state.entry_mode = "edit"
+                                    st.rerun()
+    
+                            elif status == 'approved':
+                                if st.button(
+                                    "👁️ View",
+                                    key=f"view_{entry['year']}_{entry['month']}"
+                                ):
+                                    st.session_state.active_entry = entry
+                                    st.session_state.entry_mode = "view"
+                                    st.rerun()
+    
+        # ---- Edit / View Section ----
+        if st.session_state.get("active_entry"):
+            st.divider()
+    
+            entry = st.session_state.active_entry
+            mode = st.session_state.entry_mode
+            readonly = (mode == "view")
+    
+            month_year = datetime(entry['year'], entry['month'], 1).strftime('%B %Y')
+    
+            st.subheader(
+                "✏️ Editing Report" if mode == "edit"
+                else "👁️ Viewing Report"
+                + f": {month_year}"
+            )
+    
+            form_data = {}
+    
+            for category, details in MONTHLY_CATEGORIES.items():
+                with st.expander(category, expanded=True):
+                    for field in details['fields']:
+                        key = f"{category}_{field['id']}"
+                        value = entry.get('data', {}).get(key, "")
+    
+                        if field['type'] == 'number':
+                            form_data[key] = st.number_input(
+                                field['label'],
+                                value=value,
+                                disabled=readonly,
+                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
+                            )
+                        elif field['type'] == 'dropdown':
+                            form_data[key] = st.selectbox(
+                                field['label'],
+                                field['options'],
+                                index=field['options'].index(value) if value in field['options'] else 0,
+                                disabled=readonly,
+                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
+                            )
+                        else:
+                            form_data[key] = st.text_area(
+                                field['label'],
+                                value=value,
+                                disabled=readonly,
+                                key=f"{key}_{mode}_{entry['year']}_{entry['month']}"
+                            )
+    
+            if mode == "edit":
+                if st.button("💾 Update Report"):
+                    save_monthly_data(
+                        entry['district'],
+                        entry['month'],
+                        entry['year'],
+                        form_data,
+                        status=entry['status']
+                    )
+                    st.success("Report updated successfully")
+                    st.session_state.active_entry = None
+                    st.rerun()
+    
+            if st.button("❌ Close"):
+                st.session_state.active_entry = None
+                st.rerun()
+
     
     # ===== TAB 3: PROGRESS SUMMARY =====
     with tab3:
