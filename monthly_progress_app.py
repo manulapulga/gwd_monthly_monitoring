@@ -383,9 +383,12 @@ def district_dashboard():
         existing_data = get_district_data(st.session_state.user_district, month, year)
         if existing_data:
             st.warning(f"⚠️ Entry for {datetime(year, month, 1).strftime('%B %Y')} already exists")
+        
             if existing_data[0]['status'] == 'approved':
                 st.error("❌ This entry has been approved and cannot be modified")
-                return
+                st.info("You can view this report under 'View Submissions'")
+                st.stop()
+
             elif st.button("Edit Existing Entry"):
                 st.session_state.edit_mode = True
                 st.session_state.existing_data = existing_data[0]
