@@ -382,9 +382,12 @@ def district_dashboard():
         # Check if entry already exists
         existing_data = get_district_data(st.session_state.user_district, month, year)
         
+        show_form = True   # controls whether blank form appears
         entry_locked = False
         
         if existing_data:
+            show_form = False  # never allow new blank form
+        
             st.warning(
                 f"⚠️ Entry for {datetime(year, month, 1).strftime('%B %Y')} already exists"
             )
@@ -395,10 +398,11 @@ def district_dashboard():
                 entry_locked = True
         
             else:
-                if st.button("Edit Existing Entry"):
+                if st.button("✏️ Edit Existing Entry"):
                     st.session_state.edit_mode = True
                     st.session_state.existing_data = existing_data[0]
-        
+                    show_form = True
+
         
         # Form header
         with st.container(border=True):
